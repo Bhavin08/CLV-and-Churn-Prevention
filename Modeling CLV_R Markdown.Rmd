@@ -1,0 +1,898 @@
+---
+title: "Modeling Customer Lifetime and Churn PreventionC"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+#install.packages("survival")
+#install.packages("rms", dependencies = T)
+
+# Link to install latticeExtra package
+# https://github.com/ge11232002/latticeExtra
+#devtools::install_github("ge11232002/latticeExtra")
+#install.packages("descr")
+```
+
+## Load required packages
+```{r message=FALSE, warning=FALSE}
+library(dplyr)
+library(ggplot2)
+library(corrplot)
+library(viridisLite)
+library(viridis)
+library(lattice)
+library(car)
+library(MASS)
+library(caret)
+library(pROC)
+library(boot)
+library(ModelMetrics)
+library(survival)
+library(latticeExtra)
+library(Hmisc)
+library(rms)
+library(descr)
+library(ggfortify)
+```
+
+
+## Load required files
+```{r}
+salesData = read.csv("/Users/bhavinghoghari/Desktop/Work/Self Learn/R/Marketing Analytics in R/Data Camp_Data sets/salesData.csv")
+
+```
+
+
+## Explore salesData using str()
+```{r}
+str(salesData, give.attr = F)
+```
+
+```{r}
+ggplot(data = salesData, aes(x = salesThisMon, y = nItems)) +
+  geom_jitter(aes(color = salesThisMon, alpha = 0.6)) +
+  scale_color_viridis(option = "d", direction = -1) +
+  guides(alpha = F) +
+  theme_minimal() +
+  labs(x = "Sales This Month", y = "Number of Items") +
+  theme(legend.title = element_blank())
+```
+
+
+## Now visualize the correlation of the continuous explanatory variables for the past three months with the sales variable of this month. Use the functions cor() and corrplot() and the pipe operator. 
+```{r}
+# Plot correlation
+salesData %>% 
+  select_if(is.numeric) %>% 
+  dplyr::select(-id) %>% 
+  cor(use = "complete.obs") %>% 
+  corrplot(method = 'square',
+           diag = F,
+           tl.col = "black")
+```
+
+Correlation for number of items orderd, number of brands, ncats, and sales in last 3 months has positive strong correlation with sales.  
+We also observe somewhat positive correlation with customer druration to sales
+
+
+## Make a box plot to see the distribution of most frequent stores and preferred brand
+
+#### Most frequent stores
+```{r}
+ggplot(data = salesData, aes(x = mostFreqStore, y = salesThisMon, color = salesThisMon)) +
+  geom_boxplot(alpha = 0.25) +
+  geom_jitter(shape = 16, position = position_jitter(0.2), size = 1.5, alpha = 0.7) +
+  scale_color_gradientn(name = "", colours = rev(viridis::viridis(20))) +
+  guides(color = F) +
+  theme_minimal() +
+  labs(x = "Most Frequent Stores", y = "Sales This Month") +
+  theme(axis.text.x = element_text(angle = 45))
+```
+
+#### Most preferred brands
+```{r}
+ggplot(data = salesData, aes(x = preferredBrand, y = salesThisMon, color = salesThisMon)) +
+  geom_boxplot(alpha = 0.25) +
+  geom_jitter(shape = 16, position = position_jitter(0.2), size = 1.5, alpha = 0.7) +
+  scale_color_gradientn(name = "", colours = rev(viridis::viridis(20))) +
+  guides(color = F) 
+```
+
+
+## Linear Regression Model
+Now that we have looked at the correlation between variables,
+Let's build a linear regression model
+
+Lets start by building a simple linear regression model using sales in the last 3 months as independent varioable since it has a strong positive correlation with sales as observed in above correlation plot
+```{r}
+salesSimpleModel = lm(salesThisMon ~ salesLast3Mon, 
+                       data = salesData)
+
+# Looking at model summary
+summary(salesSimpleModel)
+```
+
+1. The regression coeffecient of 0.38 means for every increase in sales of past 3 months, sales for this month will increase by 0.38 units.
+2. And 59.3% of change in sales for this month can be attributed to sales in past 3 months.
+
+
+## Build Multiple linear regression model
+```{r}
+salesModel1 <- lm(salesThisMon ~ . - id, 
+                 data = salesData)
+summary(salesModel1)
+```
+
+But one of the problem with multiple regression model is VIF.
++ check VIF from "car" package and get rid of with one pair of variable with VIF valuef of abve 10
+
+**A variance inflation factor greater than 5 hints to multicollinearity, greater than 10 indicates unstable regression estimates.**
+
+```{r}
+# library(car)
+car::vif(salesModel1)
+```
+
+
+Build another model by removing variables nItems and preferredBrand
+```{r}
+salesModel2 <- lm(salesThisMon ~ . - id - nBrands,
+                 data = salesData)
+summary(salesModel2)
+car::vif(salesModel2)
+```
+
+
+## Now, it's time for model validation, model fit, and prediction
+*F test is the test used to validate the model*
+In our salesModel2, the value of p is less tha 0.05 and hence, the hypothesis of Rsquare equal to 0 is rejected
+
+#### Method to avoid overfitting:
+1. AIC() from stats package - useful when comparing two or more models. AIC Minimizing model is preferred when comparing two or more models
+2. stepAIC() from MASS package
+3. out-of-sample model validation
+4. cross-validation
+
+### Predcict the sales and calculate it'e mean on new data set
+```{r}
+# load new data set
+salesData2_4 = read.csv("/Users/bhavinghoghari/Desktop/Work/Self Learn/R/Marketing Analytics in R/Data Camp_Data sets/salesDataMon2To4.csv")
+
+# use predict () function on new data set
+predictSales5 = predict(salesModel2, newdata = salesData2_4) %>% as.data.frame()
+colnames(predictSales5)
+# calculate mean
+mean(predictSales5$.)
+```
+
+
+```{r}
+# running a stepAIC model 
+# this model decreases the AIC value compared to salesModel2 hence this seems to be better fit
+salesModel3 <- stepAIC(salesModel2, trace = 0)
+
+summary(salesModel3)
+```
+
+```{r}
+AIC(salesModel2)
+AIC(salesModel3)
+```
+
+```{r}
+# use predict () function on new data set
+predictSales6 = predict(salesModel3, newdata = salesData2_4) %>% as.data.frame()
+# calculate mean
+mean(predictSales6$.)
+mean(salesData$salesThisMon)
+mean(predictSales5$.)
+```
+
+
+```{r}
+# plotting predicted values with actual values
+ggplot() +
+  geom_histogram(data = salesData, aes(x = salesThisMon)) +
+  geom_histogram(data = predictSales5, fill = "orange", aes(x = ., alpha = 0.7)) +
+  guides(fill = F, alpha = F) +
+  theme_minimal()
+```
+```{r}
+# plotting predicted values with actual values
+ggplot() +
+  geom_histogram(data = salesData, aes(x = salesThisMon)) +
+  geom_histogram(data = predictSales6, fill = "yellow", aes(x = ., alpha = 0.7)) +
+  guides(fill = F, alpha = F) +
+  theme_minimal()
+```
+
+
+# Churn Prevention
+### Using Logistic Regression
+
+
+```{r}
+# Load required file
+defaultData = read.csv("/Users/bhavinghoghari/Desktop/Work/Self Learn/R/Marketing Analytics in R/Data Camp_Data sets/defaultData.csv", header = T, sep = ";")
+
+glimpse(defaultData)
+```
+
+
+Get some more insights about the variable of interest PaymentDefault by plotting a bar chart of the two levels.
+```{r}
+ggplot(data = defaultData, aes(x = PaymentDefault)) +
+  geom_histogram(stat = "count") +
+  geom_text(aes(y = PaymentDefault,
+                label = PaymentDefault)) +
+  theme_minimal()
+```
+
+
+#### Logistic Regression Model
+##### How does hypothesis test actually works?
+When we draw a curve on graph for 0 and 1, we see the value is towards the end of tail of 0, then the null hypothesis is more like to be proven void.
+
+#### Model Selection
+It is important to understand which variables to include in the model.
+One of the few method is to use "stepAIC()" from package "mass".
++ This method uses selects and drops all variable simantaniously until the AIC value of model drops to lowest possible value 
+```{r}
+# build a logistic regression model
+logitModelFull <- glm(PaymentDefault ~ limitBal + sex + education + marriage +
+                   age + pay1 + pay2 + pay3 + pay4 + pay5 + pay6 + billAmt1 + 
+                   billAmt2 + billAmt3 + billAmt4 + billAmt5 + billAmt6 + payAmt1 + 
+                   payAmt2 + payAmt3 + payAmt4 + payAmt5 + payAmt6, 
+                 family = binomial, data = defaultData)
+
+# Take a look at the model
+summary(logitModelFull)
+```
+
+
+Extract the coefficients from the model, then transform them to the odds ratios and round
+*By applying the exp() function to the coefficients (coef()) of the logit model, you can get to the effects on the odds (odds ratios).*
+```{r}
+# Take a look at the odds ratios
+coefsexp <- coef(logitModelFull) %>% exp() %>% round(2)
+coefsexp
+```
+
+
+Checking the odds ratio helps us get a direction of effect of independent variables to dependent variables
+> The above result shows that married people are more likely to buy back by factor of 0.84 compared to somebody who is not marrried.
+
+
+#### Build another model using stepAIC() and see the difference in AIC value
+load required package "MASS"
+```{r}
+# library(MASS)
+# Set trace = 0, as you do not want to get an output for the whole model selection process. Save the result to the object logitModelNew
+logitModelNew <- stepAIC(logitModelFull, trace = 0)
+
+summary(logitModelNew)
+```
+
+```{r}
+coefsexp2 <- coef(logitModelNew) %>% exp() %>% round(2)
+coefsexp2
+```
+
+
+The formula is saved in an object so that you don't have to type the whole equation again when you want to use it later.
+```{r}
+# Save the formula of the new model (it will be needed for the out-of-sample part) 
+formulaLogit <- as.formula(summary(logitModelNew)$call)
+formulaLogit
+```
+
+
+#### In-Sample model fit and Thresholding
+#### Ways to measure the accuracy and validation of model
+
+##### 1. Similar to R square in linear regression, in logistic regression we use Pseudo R square statistics.
+This includes:
+1. McFadden,
+2. Cox & Snell
+3. Nagelkerke
+
+Interpretation - For this method,
+1. **Reasonable > 0.2** value of 0.2 or higher is resonable
+2. **Good if > 0.4** value of 0.4 or higher is considered good
+3. **Very Good if > 0.5** value of 0.5 or higher is considered to be very good
+
+Package "descr" and function LogRegR2() gives us a value of Pseudo R2 for above three methods.
+_Garbage in, Garbage out_
+_model can only be as good as the data_
+
+```{r}
+# load required dscr package
+LogRegR2(logitModelNew)
+```
+
+
+##### 2. Another way to test the accuracy of model is to use predict() to predict the future values using type = "response" and compare it against the actual values
+
+##### 3. Another test is to use confusion matrix from package "SDMTools:
+_note that SDMTools cannot be downloaded from CRAN anymore. Install it instead it via ```{r}remote::install_version("SDMTools", "1.1-221")```_
+
+##### Checking the accuracy of of model
+It is not always correct to check the accuracy or mean of predicted to actual values since the model might accurately predict that more customers would not return but it does also predict that more customers would return while in actual only few customers actually returned. 
+
+Hence, finding the right threshold is necessary to acheive the highest possible payoff even though it means decrease in model accuracy rate.
+```{r}
+# calculate prediction using predict() on logitModelFull
+defaultData$predFull = predict(logitModelFull, type = "response", na.action = na.exclude)
+```
+
+
+Now build a confusion matrix from package "caret" to see the accuracy of the model
+_make sure that the string type is set to factor for actual values and predicted values_
+```{r}
+# set a threshold of 0.5 and convert it to integer to match with the actual values class
+defaultData$predFull_0.5 = as.integer(ifelse(defaultData$predFull >= 0.5, 1, 0))
+
+# create a confusion matrix using package "caret" and set both string to factor class
+# library(caret)
+confMatrixModelFull = confusionMatrix(defaultData$PaymentDefault, defaultData$predFull, cutoff = 0.5)
+confMatrixModelFull
+```
+
+Since we calculated the accuracy for confMatrixModelFull, also let's calculate accuracy for logitModelNew which we built above usinf stepAIC
+
+First step is to:
+1. Predict the probability using predict function and set type = "response"
+2. Set a desired threshold and mutate value to new column
+3. Create confusion matrix
+
+```{r}
+# predict the values
+defaultData$predNew = predict(logitModelNew, type = "response", na.action = na.exclude)
+
+# set threshold and convert values to 1,0
+defaultData$predNew_0.5 = as.integer(ifelse(defaultData$predNew >= 0.5, 1, 0))
+
+# create a confusion matrix using package "caret" and set both string to factor class
+# library(caret)
+confMatrixModelNew = confusionMatrix(defaultData$PaymentDefault, defaultData$predNew, cutoff = 0.5)
+confMatrixModelNew
+
+```
+
+From the above confusion matrix:
+1. **True Positive** - We correctly predicted that customer would default = 998
+2. **True Negative** - We correctly predicted that customer would not default = 13443
+3. **False Positive** - We incorrectly predicted that customer would default = 3152
+4. **False Negative** - We incorrectly predicted that customer would not default = 407
+
+#### Finding the optimal threshold is important
+Imagine you are running a campaign with the aim of preventing customers to default. You can lay out your campaign with the help of your predictions. Thereby, the choice of the threshold is essential for your results. If you know the costs and the rewards of your campaign, you can empirically check which threshold is most reasonable. In this exercise, we are faced with the following scenario:
+
+If a customer does not default due to our campaign, i.e. if we predicted the default correctly (true positive) we are rewarded with 1000€. If however we aim our campaign at a customer who would not have defaulted anyways, i.e. if we falsely predicted the customer (false positive) to default, we are faced with costs of 250€.
+
+From the last exercise we know that the restricted model was the best one. So only calculate the optimal threshold for that model.
+```{r}
+# create a confusion matrix for actual vs predicted
+confusionMatrix_tableNew_0.5 = confusionMatrix(defaultData$PaymentDefault, defaultData$predNew_0.5)
+
+# Now 
+payoff_0.5 = 1000*confusionMatrix_tableNew_0.5[2,2] - 250*confusionMatrix_tableNew_0.5[2,1]
+payoff_0.5
+```
+
+
+#### Below we now create 
+1. Predicted column for each threshold from 0.1 - 0.5
+2. Then create confusion matrix table for each preeicted threshold values
+3. Calculate payoff from each table. The value of 1000 is reward for calculating the **True Positve** value and 250 is penalty for **False Positive** values. 
+*Value of 1000 and 250 is based on knowing the value of customer. It can be changed according to business*
+```{r}
+# create a payoffmatrix for different threshold using loop
+payoffmatrix_usingLoopFunction = data.frame(threshold = c(0.1,0.2,0.3,0.4,0.5), 
+                                            payoff = c(NA,NA,NA,NA,NA))
+
+# Set up the loop
+for(i in 1:5) {
+  # Calculate specific confusion matrix with respective threshold
+  confMatrix <- confusionMatrix(defaultData$PaymentDefault,
+                defaultData$predNew, 
+                cutoff = payoffmatrix_usingLoopFunction$threshold[i])
+  # Calculate payoff and save it to the corresponding row
+  payoffmatrix_usingLoopFunction$payoff[i] <- 1000*confMatrix[2,2] - 250*confMatrix[2,1]
+}
+payoffmatrix_usingLoopFunction
+```
+> Threshold of 0.3 seems to be payoff maximum hence, we will use 0.3 as our cutoff/threshold
+
+*Another way of calculating threshold is by creating a predictive column for each threshold*
+```{r}
+str(defaultData$predNew_0.2)
+defaultData$predNew_0.1 = as.integer(ifelse(defaultData$predNew > 0.1, 1, 0))
+defaultData$predNew_0.2 = as.integer(ifelse(defaultData$predNew > 0.2, 1, 0))
+defaultData$predNew_0.3 = as.integer(ifelse(defaultData$predNew > 0.3, 1, 0))
+defaultData$predNew_0.4 = as.integer(ifelse(defaultData$predNew > 0.4, 1, 0))
+defaultData$predNew_0.5 = as.integer(ifelse(defaultData$predNew > 0.5, 1, 0))
+
+# now create table for threshold and calculate the optimal threshold value
+confusionMatrix_tableNew_0.1 = table(defaultData$PaymentDefault, defaultData$predNew_0.1)
+confusionMatrix_tableNew_0.2 = table(defaultData$PaymentDefault, defaultData$predNew_0.2)
+confusionMatrix_tableNew_0.3 = table(defaultData$PaymentDefault, defaultData$predNew_0.3)
+confusionMatrix_tableNew_0.4 = table(defaultData$PaymentDefault, defaultData$predNew_0.4)
+confusionMatrix_tableNew_0.5 = table(defaultData$PaymentDefault, defaultData$predNew_0.5)
+
+# now calculate payoff for each table 
+payoff_0.1 = 1000*confusionMatrix_tableNew_0.1[2,2] - 250*confusionMatrix_tableNew_0.1[2,1]
+payoff_0.2 = 1000*confusionMatrix_tableNew_0.2[2,2] - 250*confusionMatrix_tableNew_0.2[2,1]
+payoff_0.3 = 1000*confusionMatrix_tableNew_0.3[2,2] - 250*confusionMatrix_tableNew_0.3[2,1]
+payoff_0.4 = 1000*confusionMatrix_tableNew_0.4[2,2] - 250*confusionMatrix_tableNew_0.4[2,1]
+payoff_0.5 = 1000*confusionMatrix_tableNew_0.5[2,2] - 250*confusionMatrix_tableNew_0.5[2,1]
+
+# create payoffmatrix to compare threshold and its payoff
+payoffmatrix = matrix(ncol = 2,list("threshold" = 0.1,0.2,0.3,0.4,0.5,
+     "payoff" = payoff_0.1,payoff_0.2,payoff_0.3,payoff_0.4,payoff_0.5))
+colnames(payoffmatrix) = c("threshold", "payoff")
+payoffmatrix
+```
+
+
+From the above calculation, it is seen that the highest payoff is received from setting threshold to 0.3
+Hence, setting a threshold to 0.1 for classification would lead to maximum returns
+
+#### Now lets look at Out-of-Sampple Validation and Cross-Validation in order to avoid overfitting
+**1. Out-of-Sample Validation**
+Start by creating a train and test data set. And then create model on training and calculate prediction on test data set. Then create confusion matrix. Set threshold to 0.1 as calculated only for training data.
+
+If the accuracy is not different from the accuracy of training set, this shows the model is not overfitting the data
+
+**2. Cross-validation:**
+First split your data set into four subset randomly. Three of the subset are used as training data.
+Build a model on three train data set and use left one as test data. Follow the process and repeate testing model on all of four dataset one by one
+
+cv.glm() function from package "boot" allows to measure cross validation for linear model
+
+```{r}
+# split data into train and test
+set.seed(1031)
+split1 = sample(1:nrow(defaultData), size = 0.7*nrow(defaultData))
+train = defaultData[split1,]
+test = defaultData[-split1,]
+
+# create model on train data and 
+logitTrainNew <- glm(formulaLogit, family = binomial, data = train) # Modeling
+test$predNew <- predict(logitTrainNew, type = "response", newdata = test) # Prediction on test data set
+
+# set threshold of 0.3
+test$predNew_0.3_V2 = ifelse(test$predNew >= 0.3, 1, 0)
+
+# Out-of-sample confusion matrix and accuracy
+confMatrixModelNew = confusionMatrix(test$PaymentDefault, test$predNew_0.3_V2)
+sum(diag(confMatrixModelNew)) / sum(confMatrixModelNew) # Compare this value to the in-sample accuracy
+```
+
+
+Creating a threshold matrix to compare the payoff amount.
+Since we already did it earlier, it wasn't required but we did it just to validate and practise.
+Threshold of 0.3 remains valid.
+```{r}
+# create a payoffmatrix for different threshold using loop
+payoffmatrix_usingLoopFunction_test = data.frame(threshold = c(0.1,0.2,0.3,0.4,0.5),
+                                                 payoff = c(NA,NA,NA,NA,NA))
+
+# Set up the loop
+for(i in 1:5) {
+  # Calculate specific confusion matrix with respective threshold
+  confMatrix <- confusionMatrix(test$PaymentDefault, test$predNew, 
+                cutoff = payoffmatrix_usingLoopFunction_test$threshold[i])
+  # Calculate payoff and save it to the corresponding row
+  payoffmatrix_usingLoopFunction_test$payoff[i] <- 1000*confMatrix[2,2] - 250*confMatrix[2,1]
+}
+payoffmatrix_usingLoopFunction_test
+```
+
+Upon looking at the pay off for test data, threshold 0.3 seems to be most effective. This is primarily due to high amount of payoff for **True Positive** and comparatively low penalty for **False Negative** prediction
+
+```r{} ModelMetrics::confusionMatrix()``` can be used to calculate confusion matrix from package ModelMetrics
+```{r}
+# load required package
+# library(boot)
+costAcc = function(r, pi = 0) {
+  cm = ModelMetrics::confusionMatrix(r, pi, cutoff = 0.1)
+  acc = sum(diag(cm)) / sum(cm)
+  return(acc)
+}
+
+# Cross validated accuracy for logitModelNe
+defaultData_raw = read.csv("/Users/bhavinghoghari/Desktop/Work/Self Learn/R/Marketing Analytics in R/Data Camp_Data sets/defaultData.csv", header = T, sep = ";")
+set.seed(1034)
+kfold6ModelNew = cv.glm(defaultData_raw, logitModelNew, cost = costAcc, K = 6)$delta[1] # kfold model is performed on original data set with 6 folds
+```
+
+
+
+## Modeling Time to Reorder With Survival Analysis
+
+### Survival Analysis - Introduction
+
+#### Advantages of Survival Model
+1. Less aggregation
+2. Allows us to model when an event will take place
+3. No arbitarily set timeframne 
+4. Deeper insights into customer relations
+
+#### Model helps us predict when will certain event take place instead of predicting if only event will take place or not
+
+### Data points required for Survival analysis is:
+1. Time under observation
+2. And the status at the end of the time
+
+
+#### Survival curve analysis by Kaplan-Meier
+The process to create survival curve is to create a object that holds the survival optic
+
+```{r}
+# load required file
+survivalData = read.csv("/Users/bhavinghoghari/Desktop/Work/Self Learn/R/Marketing Analytics in R/Data Camp_Data sets/survivalDataExercise.csv")
+
+str(survivalData)
+```
+
+
+#### Create a survival object
+```{r}
+# library(survival)
+survObj = Surv(survivalData$daysSinceFirstPurch, survivalData$boughtAgain)
+str(survObj)
+```
+
+
+#### Kaplan-Meir Analysis
+
+##### Compute kaplan-meir analysis without any categorical variable
+```{r}
+# use survival package and function survfit()
+fitKMSimple = survfit(survObj ~ 1)
+print(fitKMSimple)
+```
+
+The above result shows that:
+1. n = 5155, tells us that number of event is 5122
+2. of which about 3199 chruned under time the under observation
+3. median survival time is 41. i.e; about 50% of the customers do not churn before they reach the tenure of 41 months
+
+#### Plot the simple model
+```{r}
+# Plot fit
+plot(fitKMSimple,
+     conf.int = FALSE, xlab = "Time since first purchase", ylab = "Survival function", main = "Survival function")
+```
+
+Survival function in the above plot shows us that person will not churn leading up to the time period "t"
+
+#### Now, calculate the model using voucher as a function
+This is will show the difference between churn for customers who have used voucher and for those who did not used voucer
+```{r}
+fitKMCov = survfit(survObj ~ voucher, data = survivalData)
+print(fitKMCov)
+```
+
+Fromm the above analysis, it shows that about 50% of those who used voucher does not churn before 46 months of tenure
+
+Now let's plot the fitKMCov
+```{r}
+plot(fitKMCov, lty = 2:3,
+     xlab = "Time since first purchase", ylab = "Survival function", main = "Survival function")
+     legend(90, .9, c("No", "Yes"), lty = 2:3)
+```
+
+Customer who uses coupon holds comparatively higher when compared to those who do not use coupons
+
+### Cox PH model with constant covariates
+
+##### Model assumptions
+Assumptions which has to be hold True for model to deliver the predicted result
+
+Steps to do so:
+1. Describe the tenure in months
+2. Determine the distribution of predicted variable using datadist function 
+3. 
+
+```{r}
+# load package(rms) for datadist() function
+#library(rms)
+
+# Determine distributions of predictor variables
+dd <- datadist(survivalData)
+options(datadist = "dd")
+
+# Compute Cox PH Model and print results
+fitCPH <- cph(Surv(daysSinceFirstPurch, boughtAgain) ~ shoppingCartValue + voucher + returned + gender,
+              data = survivalData,
+              x = TRUE, y = TRUE, surv = TRUE)
+print(fitCPH)
+
+# Transform the coefficients using exp()I function
+# then tnterpret coefficients 
+exp(fitCPH$coefficients)
+```
+
+Coefficients are interpreted in the similar fashion as done in logistic regression
+Untransformed coeffienciets only helps in drawing the direction of the effect.
+Above transformed coefficients helps in interpretation the result easily
+
+##### From above coeffienciets results, we see risk of male churning is higer compared to female
+1.11 in this case is called the hazard ratio 
+
+Pay attention to the shopping cart value since it is a continuous variable. Interpretation here changes slightly.
+1 unit increase in cart value decreases the hazard of churning by 0.99 factor
+
+#### Let's visualize the survival probability for those who returned vs not returned
+survplot() function plots the survival probability when holding other coeffecients constant
+
+```{r}
+table(survivalData$returned)
+survplot(fitCPH, returned, label.curves = list(keys = 1:2))
+```
+Those who returned products are less likely to churn than those who did not return 
+
+#### Nice way to visualize the hazard ratio is by using summary function on the model
+```{r}
+# Plot result summary
+plot(summary(fitCPH), log = TRUE)
+```
+
+In above graph, Hazard ratio is shown with the respective confidence interval
+
+#### It is now time to validate the model by checking model assumptions and making prediction
+
+We start by validating the proportional hazards assumption using ```{r}cox.zph()``` function
+
+##### Steps to follow to check model accuracy
+1. First, we see the p value of variables using print() function on object created using cox.zph() function
+2. If for varibales p value is less than 0.05, we reject the hypothesis that given variable meets the proportional hazards assumptions aka PH Assumptions
+3. We can plot to see for any given variable if their effect changes over time using - plot() function
+
+Test prvided by coz.zph() is conservative and effected by number of observation 
+
+4. If PH assumption is violated by certain variable, a stratified analysis makes more sense.
+Where continuous variables are classed first and categorical variables are assigned to stratum
+
+5. Another solution is to model the time-dependent coefficients by dividing the time under observation into different period for which we assume the coeffecients to be constant
+
+6. Validate the model using ```r{} validate()``` function from "rms" package to estimate the R square.
+We can chose the method 10 fold cross-validation by setting the method = "crossvalidation" and setting B = 10
+we set pr = F because we don't want result to be printed after each cross-validation step
+
+
+#### We have already built a model using cox PH
+##### Now Check the proportional hazard assumption of the model fitCPH using cox.zph(). Store the test result in an object called testCPH and print it.
+
+```{r}
+testCPH = cox.zph(fitCPH)
+print(testCPH)
+```
+
+PH Hazard assumption seems to be violated for one of the variable.
+Now plot that variable to visualize it's change in regard to time
+
+```{r}
+plot(testCPH, var = "voucher")
+```
+
+```{r}
+plot(testCPH, var = "gender")
+```
+
+By comparing the above two plot, it seems that change in gender coeffecients has a tendency to change as the time goes on
+
+#### Now validate the model using ```r{}validate()``` function from rms package
+##### This is done in order to make sure model is not overfitted using cross validation method and setting fold 
+```{r}
+validate(fitCPH, method = "crossvalidation", B = 10, dxy = T, pr = F)
+```
+
+Above result shows the estimated R square value 
+
+#### Now predict the model on new data where gender = female
+```{r}
+# create data frame for new customer
+newCustomer = data.frame(daysSinceFirstPurch = 21, 
+                         shoppingCartValue = 99.90, 
+                         gender = "female", 
+                         voucher = 1, returned = 0, 
+                         stringsAsFactors = FALSE)
+
+
+# make prediction on newCustomer
+pred = survfit(fitCPH, newdata = newCustomer)
+print(pred)
+# to plot survival curve, use plot(pred)
+```
+
+Expected survival time until customer churns is 47
+
+#### Now predict the model on new data where gender = male 
+```{r}
+# create data frame for new customer
+newCustomer2 = newCustomer
+newCustomer2$gender = "male"
+
+# make prediction on newCustomer
+pred2 = survfit(fitCPH, newdata = newCustomer2)
+print(pred2)
+# to plot survival curve, use plot(pred)
+```
+
+> Median curvival time for male reduces to 42 compare to female's media survival time of 47
+
+
+## Reducing Dimensionality with Principal Component Analysis
+
+#### Learn how to reduce number of variables using Principal Component Analysis or PCA
+##### this is used to reduce the problem of multi colinearity
+
+PCA helps to:
+1. Handle multicollinearity
+2. Create indices
+3. Visualize and understand high-dimensional data 
+
+PCA serves a exploratory tools. It is not meant to test the hypothesis of your data 
+
+```{r}
+# load required file
+# news data in this case
+
+# examine the data
+str(newsData, give.attr = F)
+```
+
+```{r}
+# visualize correlation
+
+newsData %>% 
+  select_if(is.numeric) %>% 
+  cor() %>% 
+  corrplot::corrplot(method = "square",
+                     diag = F,
+                     tl.col = "black")
+```
+
+
+#### PCA Computation
+
+##### Steps to PCA Computation
+1. use prcomp() function from stats package on dataset and store it in a new object called pcaCust
+2. look at the result using str(pcaCust)  
+First column holds the standard devication of components
+Calculate Eignevalues by raising the standard component to the power of 2 that is by squaring them
+
+> The higher the Eignevalues, the important the component is  
+
+3. Additonaly, when we devide the Eignevalues by the total number of component, we get the proportional of variance that this component explains
+
+
+#### Now, to compute PCA, we will first standardized all variables in the dataset 
+```{r}
+# PCA is possible only on either numeric or nomial variables
+newsData = newsData %>% 
+  select_if(is.numeric)
+
+# standardize data
+newsData = newsData %>% 
+  scale() %>% 
+  as.data.frame()
+
+# now compute PCA using prcomp() function
+pcaNews = newsData %>% prcomp()
+
+# examine the result by looking at eigenevalues and round it to 2
+pcaNews$sdev^2 %>% round(2)
+```
+
+
+#### Now to decide the how many number of components to keep, it is always advisable to try multiple methods and keep somewhere in middle
+
+1. One way to do so is look at the summary of pcaNews and decide on the threshold. For example, by keeping to choose proportion of about 70%. __Choose components where cumulative proportion exceed 0.7 is at least more than 16 in this case__
+
+2. Another criteria is called Kaiser - Guttman criterion.
+Here you only keep components with eigenvalue > 1  
+The justification sounds reasonable because component with eigenvalue less than 1 means those component carries less variance
+
+3. Third method is using screenplot. This is a graphical method to decide on the number of relevent component.  
+This method is a visualization method where all the components with eigenvalues with value above 1 will appear above a horizantal line in graph
+
+```{r}
+# method 1 using summary
+summary(pcaNews)
+
+# method 2 using Kaiser - Guttmann
+sum(pcaNews$sdev^2 > 1)
+
+# method 3 using screenplot
+screeplot(pcaNews, type = "lines")
+
+```
+
+Now that we have decided how many components to keep using above three methods, let's interpret the components
+
+```{r}
+# print the loading which are stored in rotation element
+# using a subset function [1:6] we are only looking at 6 components. use [,1] to view entire result
+pcaNews$rotation[, 1:6] %>% round(2) %>%
+  summary()
+
+```
+
+#### Visualize with biplot
+```{r}
+pcaNews %>% 
+  biplot(cex = 0.5)
+```
+
+
+#### Principal component in a regression analysis
+
+This method can be used in linear regression to get rid of multicolinearity
+```{r}
+mod1 = lm(shares ~ ., data = newsData)
+summary(mod1)
+```
+
+
+#### Now create a date frame with shares and first 6 component and build model on it to see the difference with mod1
+```{r}
+# create a data frame with log shares and first 6 components
+dataNewsComponents = cbind(Shares = newsData[, "shares"],
+                            pcaNews$x[, 1:16]) %>% 
+  as.data.frame()
+
+# Predict log shares with first six components
+mod2 <- lm(Shares ~ ., data = dataNewsComponents)
+
+# Print adjusted R squared for both models
+summary(mod1)$adj.r.squared
+summary(mod2)$adj.r.squared
+```
+
+#### Princiap component analysis in linear regression might reduce the r squared value but the coeffecients are more stable
+
+
+```{r}
+#library(ggfortify)
+summary(pcaNews$x)
+autoplot(pcaNews$rotation[, 1:6], data = newsData, color = "Group")
+```
+
+
+
+
+#### Now create a payoffmatrix using loop function and confusion.matrix using SDMTools package but the package is no longer supported
+needs to figure it out 
+```{r}
+# create a payoffmatrix
+payoffmatrix_usingLoopFunction = data.frame(threshold = c(0.1,0.2,0.3,0.4,0.5), 
+                                            payoff = c(NA,NA,NA,NA,NA))
+
+# Set up the loop
+for(i in 1:5) {
+  # Calculate specific confusion matrix with respective threshold
+  confMatrix <- confusionMatrix(defaultData$PaymentDefault,
+                defaultData$predNew, 
+                cutoff = payoffmatrix_usingLoopFunction$threshold[i])
+  # Calculate payoff and save it to the corresponding row
+  payoffmatrix_usingLoopFunction$payoff[i] <- 1000*confMatrix[2,2] - 250*confMatrix[2,1]
+}
+payoffmatrix_usingLoopFunction
+```
+
+
+```{r}
+# library(pROC)
+ROC = roc(defaultData$PaymentDefault, defaultData$predNew)
+plot(ROC, col = "blue")
+pROC::auc(ROC)
+```
+
